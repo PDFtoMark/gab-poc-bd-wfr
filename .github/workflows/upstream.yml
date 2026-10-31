@@ -1,0 +1,11 @@
+name: Accept Baselines Workflow
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+jobs:
+  upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "upstream ran event=$GITHUB_EVENT_NAME"

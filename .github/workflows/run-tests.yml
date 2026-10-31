@@ -1,0 +1,70 @@
+name: Run Tests and Snapshots
+
+on:
+  workflow_run:
+    workflows: ["Accept Baselines Workflow"]
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dump workflow_run event
+        run: |
+          jq -c '{event:.workflow_run.event, head_branch:.workflow_run.head_branch, head_sha:.workflow_run.head_sha, head_repo:.workflow_run.head_repository.full_name, fork:.workflow_run.head_repository.fork, prs:(.workflow_run.pull_requests|length), has_top_level_pr:(has("pull_request"))}' "$GITHUB_EVENT_PATH"
+          echo "GITHUB_REF=$GITHUB_REF"
+          echo "GITHUB_SHA=$GITHUB_SHA"
+          echo "GITHUB_HEAD_REF=[${GITHUB_HEAD_REF}]"
+      - name: Secret availability (privileged context check)
+        env:
+          S: ${{ toJSON(secrets) }}
+        run: |
+          if [ -n "$S" ] && [ "$S" != "{}" ]; then echo "SECRETS_PRESENT=yes"; else echo "SECRETS_PRESENT=no"; fi
+          if [ -n "$S" ]; then echo "secret_key_count=$(echo "$S" | jq 'keys|length')"; fi
+      - uses: actions/checkout@v6
+      - name: Evidence that base branch (not PR head) was checked out
+        run: |
+          echo "DEFAULT_CHECKOUT_HEAD=$(git rev-parse HEAD)"
+          git status --porcelain
+          if [ -f ATTACKER.txt ]; then echo "ATTACKER_FILE_PRESENT=yes"; else echo "ATTACKER_FILE_PRESENT=no"; fi
+          echo "PACKAGE_JSON_POSTINSTALL=$(node -e "console.log(require('./package.json').scripts.postinstall)")"
+      - run: npm install --ignore-scripts=false
+        continue-on-error: true
+
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      changed_components: ${{ steps.get-changes.outputs.result }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Get changed files via GitHub API
+        id: get-changes
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const githubData = await github.paginate(
+              github.rest.pulls.listFiles,
+              { owner: context.repo.owner, repo: context.repo.repo, pull_number: pr.number }
+            );
+            const fs = require('fs');
+            const files = [...new Set(
+              githubData
+              .map(githubInfo => githubInfo.filename)
+              .filter(filePath => filePath.startsWith('_src-lp/blocks/'))
+              .map(filePath => filePath.split('/')[2])
+            )]
+              .filter(blockName => fs.existsSync(`_src-lp/blocks/${blockName}`));
+            return files;
+
+  snapshots-tests:
+    needs: detect-changes
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "snapshots would run privileged here"
